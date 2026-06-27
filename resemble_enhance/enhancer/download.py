@@ -1,7 +1,7 @@
 import logging
+from contextlib import closing
 from pathlib import Path
-
-import torch
+from urllib.request import urlopen
 
 RUN_NAME = "enhancer_stage2"
 
@@ -26,5 +26,7 @@ def download(run_dir: str | Path | None = None):
             continue
         url = get_source_url(relpath)
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.hub.download_url_to_file(url, str(path))
+        logger.info("Downloading %s -> %s", url, path)
+        with closing(urlopen(url)) as response, path.open("wb") as f:
+            f.write(response.read())
     return get_target_path("", run_dir=run_dir)
