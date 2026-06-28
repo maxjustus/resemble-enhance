@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 
 import librosa
+import mlx.core as mx
 import numpy as np
 import scipy.signal
 import soundfile as sf
@@ -131,6 +132,46 @@ def mel_spectrogram(
     min_level_db = 20.0 * math.log10(magnitude_min)
     mel = (mel - min_level_db) / (-min_level_db + 15.0)
     return mel.astype(np.float32)
+
+
+def mel_spectrogram_mlx(
+    wav: np.ndarray | mx.array,
+    *,
+    n_fft: int,
+    hop_length: int,
+    win_length: int,
+    preemphasis_coeff: float,
+    mel_filter_bank: np.ndarray | mx.array,
+    magnitude_min: float,
+    window: np.ndarray | mx.array | None = None,
+) -> np.ndarray:
+    if window is None:
+        window = periodic_hann_window(win_length)
+
+    x = mx.array(wav, dtype=mx.float32)
+    if preemphasis_coeff > 0:
+        x = mx.concatenate([x[:1], x[1:] - preemphasis_coeff * x[:-1]], axis=0)
+
+    fft_window = mx.array(window, dtype=mx.float32)
+    if win_length != n_fft:
+        left = (n_fft - win_length) // 2
+        right = n_fft - win_length - left
+        fft_window = mx.pad(fft_window, [(left, right)], mode="constant")
+
+    pad = n_fft // 2
+    x = mx.pad(x, [(pad, pad)], mode="constant")
+    n_frames = 1 + (x.shape[0] - n_fft) // hop_length
+    frames = mx.as_strided(x, shape=(n_frames, n_fft), strides=(hop_length, 1))
+    spec = mx.fft.rfft(frames * fft_window, n=n_fft, axis=-1)
+    mag = mx.transpose(mx.abs(spec), (1, 0))
+
+    mel = mx.array(mel_filter_bank, dtype=mx.float32).T @ mag
+    mel = mx.maximum(mel, magnitude_min)
+    mel = mx.log10(mel) * 20.0
+    min_level_db = 20.0 * math.log10(magnitude_min)
+    mel = (mel - min_level_db) / (-min_level_db + 15.0)
+    mx.eval(mel)
+    return np.asarray(mel, dtype=np.float32)
 
 
 def compute_corr(x: np.ndarray, y: np.ndarray) -> np.ndarray:

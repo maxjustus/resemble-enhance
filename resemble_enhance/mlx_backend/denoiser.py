@@ -11,7 +11,7 @@ import numpy as np
 from ..hparams import HParams
 from .audio import (
     istft_torch_like,
-    mel_spectrogram,
+    mel_spectrogram_mlx,
     merge_chunks,
     normalize_waveform,
     periodic_hann_window,
@@ -68,9 +68,8 @@ class MLXDenoiser(nn.Module):
             x = x[None]
         out = []
         for wav in x:
-            mel = mel_spectrogram(
+            mel = mel_spectrogram_mlx(
                 wav,
-                sample_rate=self.hp.wav_rate,
                 n_fft=self.hp.n_fft,
                 hop_length=self.hp.hop_size,
                 win_length=self.hp.win_size,
@@ -196,16 +195,14 @@ def load_denoiser(weights_path: str | Path | None = None, *, hparams_path: str |
     return model
 
 
-def denoise_audio_mlx(
+def denoise_audio_with_model(
+    model: MLXDenoiser,
     wav: np.ndarray,
     sample_rate: int,
     *,
-    weights_path: str | Path | None = None,
-    hparams_path: str | Path | None = None,
     chunk_seconds: float | None = None,
     overlap_seconds: float | None = None,
 ) -> tuple[np.ndarray, int]:
-    model = load_denoiser(weights_path, hparams_path=hparams_path)
     wav = resample_audio(np.asarray(wav, dtype=np.float32), sample_rate, model.hp.wav_rate)
     sr = model.hp.wav_rate
 
@@ -226,3 +223,22 @@ def denoise_audio_mlx(
 
     hwav = merge_chunks(chunks, chunk_length, hop_length, sr=sr, length=wav.shape[-1])
     return hwav.astype(np.float32), sr
+
+
+def denoise_audio_mlx(
+    wav: np.ndarray,
+    sample_rate: int,
+    *,
+    weights_path: str | Path | None = None,
+    hparams_path: str | Path | None = None,
+    chunk_seconds: float | None = None,
+    overlap_seconds: float | None = None,
+) -> tuple[np.ndarray, int]:
+    model = load_denoiser(weights_path, hparams_path=hparams_path)
+    return denoise_audio_with_model(
+        model,
+        wav,
+        sample_rate,
+        chunk_seconds=chunk_seconds,
+        overlap_seconds=overlap_seconds,
+    )

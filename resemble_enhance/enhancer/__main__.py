@@ -84,28 +84,29 @@ def main():
             return out.cpu().numpy(), out_sr
 
     else:
-        from ..mlx_backend.denoiser import denoise_audio_mlx
-        from ..mlx_backend.enhancer import enhance_audio_mlx
+        from ..mlx_backend.denoiser import denoise_audio_with_model, load_denoiser
+        from ..mlx_backend.enhancer import enhance_audio_with_model, load_enhancer
 
-        def process(wav: np.ndarray, sr: int, index: int):
-            if args.denoise_only:
-                return denoise_audio_mlx(
+        if args.denoise_only:
+            mlx_model = load_denoiser(args.weights_path, hparams_path=args.hparams_path)
+
+            def process(wav: np.ndarray, sr: int, index: int):
+                return denoise_audio_with_model(mlx_model, wav, sr)
+
+        else:
+            mlx_model = load_enhancer(args.weights_path, hparams_path=args.hparams_path)
+
+            def process(wav: np.ndarray, sr: int, index: int):
+                return enhance_audio_with_model(
+                    mlx_model,
                     wav,
                     sr,
-                    weights_path=args.weights_path,
-                    hparams_path=args.hparams_path,
+                    nfe=args.nfe,
+                    solver=args.solver,
+                    lambd=args.lambd,
+                    tau=args.tau,
+                    seed=args.seed + index,
                 )
-            return enhance_audio_mlx(
-                wav,
-                sr,
-                weights_path=args.weights_path,
-                hparams_path=args.hparams_path,
-                nfe=args.nfe,
-                solver=args.solver,
-                lambd=args.lambd,
-                tau=args.tau,
-                seed=args.seed + index,
-            )
 
     pbar = tqdm(paths)
     for index, path in enumerate(pbar):

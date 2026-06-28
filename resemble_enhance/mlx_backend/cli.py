@@ -4,8 +4,8 @@ import argparse
 from pathlib import Path
 
 from .audio import load_audio, save_audio
-from .denoiser import denoise_audio_mlx
-from .enhancer import enhance_audio_mlx
+from .denoiser import denoise_audio_with_model, load_denoiser
+from .enhancer import enhance_audio_with_model, load_enhancer
 
 
 def main():
@@ -35,20 +35,20 @@ def main():
     wav, sr = load_audio(args.input)
 
     if args.command == "denoise":
-        out, out_sr = denoise_audio_mlx(
+        model = load_denoiser(args.weights_path, hparams_path=args.hparams_path)
+        out, out_sr = denoise_audio_with_model(
+            model,
             wav,
             sr,
-            weights_path=args.weights_path,
-            hparams_path=args.hparams_path,
             chunk_seconds=args.chunk_seconds,
             overlap_seconds=args.overlap_seconds,
         )
     else:
-        out, out_sr = enhance_audio_mlx(
+        model = load_enhancer(args.weights_path, hparams_path=args.hparams_path)
+        out, out_sr = enhance_audio_with_model(
+            model,
             wav,
             sr,
-            weights_path=args.weights_path,
-            hparams_path=args.hparams_path,
             solver=args.solver,
             nfe=args.nfe,
             lambd=args.lambd,

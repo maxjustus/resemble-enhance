@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+from functools import lru_cache
 from pathlib import Path
 
 import librosa
@@ -12,7 +13,7 @@ import scipy.optimize
 
 from ..enhancer.download import download as download_source_checkpoint
 from ..enhancer.hparams import HParams
-from .audio import mel_spectrogram, merge_chunks, normalize_waveform, periodic_hann_window, resample_audio
+from .audio import mel_spectrogram_mlx, merge_chunks, normalize_waveform, periodic_hann_window, resample_audio
 from .denoiser import MLXDenoiser
 from .layers import IRMAE, UnivNet, WN
 
@@ -48,6 +49,7 @@ class Solver:
     def __init__(self, method: str = "midpoint", nfe: int = 32, time_mapping_divisor: int = 4):
         self.configurate_(nfe=nfe, method=method)
         self._time_mapping_divisor = time_mapping_divisor
+        self._time_grid_cache: dict[tuple[str, int, float, float, int], np.ndarray] = {}
 
     def configurate_(self, nfe: int | None = None, method: str | None = None):
         if nfe is not None:
@@ -58,11 +60,19 @@ class Solver:
             self.method = "euler"
 
     @staticmethod
+    @lru_cache(maxsize=None)
+    def _exponential_decay_base(n: int) -> float:
+        def h(x, a):
+            return (a**x - 1) / (a - 1)
+
+        return float(scipy.optimize.fsolve(lambda a_: h(1 / n, a_) - 0.5, x0=0)[0])
+
+    @staticmethod
     def exponential_decay_mapping(t, n: int = 4):
         def h(x, a):
             return (a**x - 1) / (a - 1)
 
-        a = float(scipy.optimize.fsolve(lambda a_: h(1 / n, a_) - 0.5, x0=0)[0])
+        a = Solver._exponential_decay_base(n)
         return h(np.asarray(t, dtype=np.float64), a=a).astype(np.float32)
 
     @property
@@ -104,8 +114,16 @@ class Solver:
             return self._rk4_step
         raise ValueError(f"Unknown method: {self.method}")
 
+    def _time_grid(self, t0: float, t1: float) -> np.ndarray:
+        key = (self.method, self.n_steps, float(t0), float(t1), self._time_mapping_divisor)
+        ts = self._time_grid_cache.get(key)
+        if ts is None:
+            ts = self.time_mapping(np.linspace(t0, t1, self.n_steps + 1))
+            self._time_grid_cache[key] = ts
+        return ts
+
     def __call__(self, f, psi0: mx.array, t0: float = 0.0, t1: float = 1.0) -> mx.array:
-        ts = self.time_mapping(np.linspace(t0, t1, self.n_steps + 1))
+        ts = self._time_grid(t0, t1)
         psi_t = psi0
         for i in range(self.n_steps):
             dt = float(ts[i + 1] - ts[i])
@@ -265,9 +283,8 @@ class MLXEnhancer(nn.Module):
             x = x[None]
         out = []
         for wav in x:
-            mel = mel_spectrogram(
+            mel = mel_spectrogram_mlx(
                 wav,
-                sample_rate=self.hp.wav_rate,
                 n_fft=self.hp.n_fft,
                 hop_length=self.hp.hop_size,
                 win_length=self.hp.win_size,
@@ -339,12 +356,11 @@ def load_enhancer(weights_path: str | Path | None = None, *, hparams_path: str |
     return model
 
 
-def enhance_audio_mlx(
+def enhance_audio_with_model(
+    model: MLXEnhancer,
     wav: np.ndarray,
     sample_rate: int,
     *,
-    weights_path: str | Path | None = None,
-    hparams_path: str | Path | None = None,
     solver: str | None = None,
     nfe: int | None = None,
     lambd: float = 0.5,
@@ -353,7 +369,6 @@ def enhance_audio_mlx(
     chunk_seconds: float | None = None,
     overlap_seconds: float | None = None,
 ) -> tuple[np.ndarray, int]:
-    model = load_enhancer(weights_path, hparams_path=hparams_path)
     model.configurate_(
         nfe=model.hp.cfm_solver_nfe if nfe is None else nfe,
         solver=model.hp.cfm_solver_method if solver is None else solver,
@@ -380,3 +395,32 @@ def enhance_audio_mlx(
 
     hwav = merge_chunks(chunks, chunk_length, hop_length, sr=sr, length=wav.shape[-1])
     return hwav.astype(np.float32), sr
+
+
+def enhance_audio_mlx(
+    wav: np.ndarray,
+    sample_rate: int,
+    *,
+    weights_path: str | Path | None = None,
+    hparams_path: str | Path | None = None,
+    solver: str | None = None,
+    nfe: int | None = None,
+    lambd: float = 0.5,
+    tau: float = 0.5,
+    seed: int = 0,
+    chunk_seconds: float | None = None,
+    overlap_seconds: float | None = None,
+) -> tuple[np.ndarray, int]:
+    model = load_enhancer(weights_path, hparams_path=hparams_path)
+    return enhance_audio_with_model(
+        model,
+        wav,
+        sample_rate,
+        solver=solver,
+        nfe=nfe,
+        lambd=lambd,
+        tau=tau,
+        seed=seed,
+        chunk_seconds=chunk_seconds,
+        overlap_seconds=overlap_seconds,
+    )
